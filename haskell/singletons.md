@@ -105,4 +105,50 @@ $(singletons [d|
   |])
 ```
 
+Equality and coercion
+---------
 
+Sometimes we wish to check for equality on the type level and run time. Run time type erasure can make this very tricky, but luckily singletons is here to help us.
+
+Let's define a function which allows us to expand out a vector to a new size, padding with a supplied value.
+
+```haskell
+expand :: SVector n a -> a -> SVector m a
+```
+
+Although we can define this by hand easily enough, it will be hard to convince the compiler. To do so, we need to use type level equality. We redefine `Peano` as follows. 
+
+```hasekll
+$(singletons [d|
+  data Peano = Z | S Peano
+      deriving (Eq,Show,Ord)
+  |])
+```
+
+By defining the Eq and Ord instances inside the singletons QuasiQuote, singletons derives promoted (`POrd` and `PEq`) and singleton (`SEq`, `SDecide` and `SOrd`) instances for us automatically. Promoted instances work on type level instances and singleton versions on the Sing type. The type we're interested in is `SDecide`, which allows us to prove to the compiler than two sings are equal.
+
+`SDecide` is defined as follows.
+
+```haskell 
+class SDecide k where
+  (%~) :: Sing (a :: k) -> Sing (b :: k) -> Decision (a :~: b)
+```
+
+Note that this a *kind* class: it works of a kind (such as \'Peano) not a type (such as Peano). Decision is defined as
+
+```haskell
+data Decision a = Proved a | Disproved (Refuted a)
+type Refuted a = a -> Void
+```
+
+`Decision` either produces a proof of something, or a function that make `Void`. Finally, we can look at `(:~:)`. `(:~:)` is a witness to the proof that two types are equal. We can use the constructor `Refl` to get `a :~: a`, or proof that the same two type are equal. `Data.Type.Equality` contains a number of functions to manipulate these such as`apply :: (f :~: g) -> (a :~: b) -> f a :~: g b`. These can be used to coerce types that are equal with `repr :: (a :~: b) -> Coercion a b` and `coerceWith :: Coercion a b -> a -> b`. We can now write out expand
+
+```haskell
+expand :: forall m n a . (SingI m, SingI n) 
+  => SVector n a
+  -> a
+  -> SVector m a
+expand v a = case (sing :: Sing n) %~ (sing :: Sing m) of
+  Disproved _ -> expand (a :*: v) a
+  Proved equal -> coerceWith (rep $ apply (apply Refl equal)) v
+```
